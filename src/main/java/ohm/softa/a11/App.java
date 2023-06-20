@@ -3,6 +3,7 @@ package ohm.softa.a11;
 import ohm.softa.a11.openmensa.OpenMensaAPI;
 import ohm.softa.a11.openmensa.OpenMensaAPIService;
 import ohm.softa.a11.openmensa.model.Canteen;
+import ohm.softa.a11.openmensa.model.Meal;
 import ohm.softa.a11.openmensa.model.PageInfo;
 
 import java.text.ParseException;
@@ -25,7 +26,7 @@ public class App {
 	private static final Calendar currentDate = Calendar.getInstance();
 	private static int currentCanteenId = -1;
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws ExecutionException, InterruptedException {
 		MenuSelection selection;
 		/* loop while true to get back to the menu every time an action was performed */
 		do {
@@ -50,49 +51,63 @@ public class App {
 		} while (true);
 	}
 
-	private static void printCanteens() {
+	private static void printCanteens() throws ExecutionException, InterruptedException {
 		System.out.print("Fetching canteens [");
 		/* TODO fetch all canteens and print them to STDOUT
 		 * at first get a page without an index to be able to extract the required pagination information
 		 * afterwards you can iterate the remaining pages
 		 * keep in mind that you should await the process as the user has to select canteen with a specific id */
-		try {
-			openMensaAPI.getCanteens().thenApplyAsync((response) -> {
-				List<Canteen> canteens = new LinkedList<>();
-				if (response.body() != null) {
-					canteens = response.body();
-				}
+		openMensaAPI.getCanteens().thenApplyAsync((response) -> {
+			List<Canteen> canteens = new LinkedList<>();
+			if (response.body() != null) {
+				canteens = response.body();
+			}
 
-				PageInfo pageInfo = PageInfo.extractFromResponse(response);
+			PageInfo pageInfo = PageInfo.extractFromResponse(response);
 
-				CompletableFuture<List<Canteen>> nextPageFuture = null;
-				for (int i = 2; i <= pageInfo.getTotalCountOfPages(); i++) {
-					if (nextPageFuture == null) {
-						nextPageFuture = openMensaAPI.getCanteens(i);
-					} else {
-						nextPageFuture = nextPageFuture.thenCombine(openMensaAPI.getCanteens(i), (a, b) -> {
-							a.addAll(b);
-							return a;
-						});
-					}
+			CompletableFuture<List<Canteen>> nextPageFuture = null;
+			for (int i = 2; i <= pageInfo.getTotalCountOfPages(); i++) {
+				if (nextPageFuture == null) {
+					nextPageFuture = openMensaAPI.getCanteens(i);
+				} else {
+					nextPageFuture = nextPageFuture.thenCombine(openMensaAPI.getCanteens(i), (a, b) -> {
+						a.addAll(b);
+						return a;
+					});
 				}
-				try {
-					canteens.addAll(nextPageFuture.get());
-				} catch (InterruptedException | ExecutionException e) {
-					System.out.println(e.getMessage());
-				}
-				return canteens;
-			}).thenAccept((allCanteens) -> allCanteens.forEach(System.out::println)).get();
-		} catch (ExecutionException | InterruptedException e) {
-			System.out.println(e.getMessage());
-		}
+			}
+			try {
+				canteens.addAll(nextPageFuture.get());
+			} catch (InterruptedException | ExecutionException e) {
+				System.out.println(e.getMessage());
+			}
+			return canteens;
+		}).thenAccept((allCanteens) -> allCanteens.forEach(System.out::println)).get();
 	}
 
-	private static void printMeals() {
+	private static void printMeals() throws ExecutionException, InterruptedException {
 		/* TODO fetch all meals for the currently selected canteen
 		 * to avoid errors retrieve at first the state of the canteen and check if the canteen is opened at the selected day
 		 * don't forget to check if a canteen was selected previously! */
-
+		if (currentCanteenId < 0) {
+			System.out.println("Invalid Canteen ID");
+			return;
+		}
+		String dateString = dateFormat.format(currentDate.getTime());
+		openMensaAPI.getCanteenState(currentCanteenId, dateString).thenApply(state -> {
+			if (state != null && !state.isClosed()) {
+				try {
+					return openMensaAPI.getMeals(currentCanteenId, dateString).get();
+				} catch (InterruptedException | ExecutionException e) {
+					System.out.println(e);
+				}
+			} else {
+				System.out.println("Canteen closed");
+			}
+			return new LinkedList<Meal>();
+		}).thenAccept(meals -> {
+			meals.forEach(System.out::println);
+		}).get();
 	}
 
 	/**
